@@ -35,7 +35,6 @@
             display: block;
         }
 
-        /* Column Setup Styles */
         .column-setup {
             margin-bottom: 20px;
         }
@@ -56,7 +55,17 @@
             border-radius: 4px;
         }
 
-        /* Data Entry Styles */
+        .total-config {
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+        }
+
+        .total-config label {
+            margin-right: 10px;
+        }
+
         .data-table {
             width: 100%;
             border-collapse: collapse;
@@ -74,7 +83,6 @@
             background-color: #f8f9fa;
         }
 
-        /* Button Styles */
         .btn {
             padding: 8px 16px;
             border: none;
@@ -109,7 +117,6 @@
             margin-bottom: 20px;
         }
 
-        /* Voice Input Styles */
         .voice-status {
             margin-top: 10px;
             padding: 10px;
@@ -122,7 +129,6 @@
             display: block;
         }
 
-        /* Input Styles */
         input[type="text"],
         input[type="number"],
         select {
@@ -135,11 +141,17 @@
         select {
             min-width: 120px;
         }
+
+        .checkbox-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 10px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <!-- Column Setup Page -->
         <div class="page active" id="setupPage">
             <h2>Column Setup</h2>
             <div class="column-setup">
@@ -153,7 +165,6 @@
             </div>
         </div>
 
-        <!-- Data Entry Page -->
         <div class="page" id="dataPage">
             <h2>Data Entry</h2>
             <div class="button-group">
@@ -187,15 +198,13 @@
                 this.currentCol = 0;
                 this.isVoiceActive = false;
                 this.recognition = null;
+                this.totalConfigs = new Map(); // Stores which columns to total for each total column
                 this.setupEventListeners();
             }
 
             setupEventListeners() {
-                // Column Setup Page
                 document.getElementById('addColumn').addEventListener('click', () => this.addColumn());
                 document.getElementById('enterData').addEventListener('click', () => this.switchToDataEntry());
-
-                // Data Entry Page
                 document.getElementById('startVoice').addEventListener('click', () => this.startVoiceInput());
                 document.getElementById('saveData').addEventListener('click', () => this.enableManualEdit());
                 document.getElementById('downloadExcel').addEventListener('click', () => this.downloadExcel());
@@ -209,12 +218,16 @@
 
                 columnItem.innerHTML = `
                     <input type="text" placeholder="Column Name" value="Column ${columnId + 1}">
-                    <select>
+                    <select onchange="dataSystem.handleColumnTypeChange(${columnId}, this)">
                         <option value="text">Name</option>
                         <option value="number">Number</option>
                         <option value="total">Total</option>
                     </select>
                     <button class="btn btn-secondary" onclick="dataSystem.removeColumn(${columnId})">Remove</button>
+                    <div class="total-config" id="totalConfig${columnId}" style="display: none;">
+                        <div>Select columns to total:</div>
+                        <div class="checkbox-group" id="checkboxGroup${columnId}"></div>
+                    </div>
                 `;
 
                 document.getElementById('columnList').appendChild(columnItem);
@@ -224,19 +237,54 @@
                 });
             }
 
+            handleColumnTypeChange(columnId, selectElement) {
+                const totalConfig = document.getElementById(`totalConfig${columnId}`);
+                const checkboxGroup = document.getElementById(`checkboxGroup${columnId}`);
+                
+                if (selectElement.value === 'total') {
+                    // Show total configuration
+                    totalConfig.style.display = 'block';
+                    checkboxGroup.innerHTML = '';
+                    
+                    // Add checkboxes for all number columns
+                    this.columns.forEach((col, index) => {
+                        if (col.type === 'number' && index < columnId) {
+                            const checkbox = document.createElement('label');
+                            checkbox.innerHTML = `
+                                <input type="checkbox" value="${index}">
+                                ${col.name}
+                            `;
+                            checkboxGroup.appendChild(checkbox);
+                        }
+                    });
+                } else {
+                    totalConfig.style.display = 'none';
+                }
+                
+                this.columns[columnId].type = selectElement.value;
+            }
+
             removeColumn(index) {
                 const columnList = document.getElementById('columnList');
                 columnList.children[index].remove();
                 this.columns.splice(index, 1);
+                this.totalConfigs.delete(index);
             }
 
             switchToDataEntry() {
-                // Save column configuration
+                // Save column configuration and total configurations
                 const columnItems = document.querySelectorAll('.column-item');
-                this.columns = Array.from(columnItems).map(item => ({
-                    name: item.querySelector('input').value,
-                    type: item.querySelector('select').value
-                }));
+                this.columns = Array.from(columnItems).map((item, index) => {
+                    const type = item.querySelector('select').value;
+                    if (type === 'total') {
+                        const checkboxes = item.querySelectorAll('input[type="checkbox"]:checked');
+                        this.totalConfigs.set(index, Array.from(checkboxes).map(cb => parseInt(cb.value)));
+                    }
+                    return {
+                        name: item.querySelector('input[type="text"]').value,
+                        type: type
+                    };
+                });
 
                 // Create table headers
                 const headerRow = document.getElementById('headerRow');
@@ -247,10 +295,8 @@
                     headerRow.appendChild(th);
                 });
 
-                // Add initial data row
                 this.addDataRow();
 
-                // Switch pages
                 document.getElementById('setupPage').classList.remove('active');
                 document.getElementById('dataPage').classList.add('active');
             }
@@ -277,21 +323,32 @@
             }
 
             updateTotals(row) {
-                const cells = row.cells;
-                let sum = 0;
-
-                this.columns.forEach((column, index) => {
-                    if (column.type === 'number') {
-                        const value = parseFloat(cells[index].querySelector('input').value) || 0;
+                this.totalConfigs.forEach((sourceColumns, totalColumnIndex) => {
+                    let sum = 0;
+                    sourceColumns.forEach(sourceIndex => {
+                        const value = parseFloat(row.cells[sourceIndex].querySelector('input').value) || 0;
                         sum += value;
+                    });
+                    row.cells[totalColumnIndex].textContent = sum.toFixed(2);
+                });
+            }
+
+            convertSpokenNumberToDigits(spokenNumber) {
+                const words = spokenNumber.toLowerCase().trim().split(' ');
+                let result = '';
+                
+                const numberWords = {
+                    'zero': '0', 'one': '1', 'two': '2', 'three': '3', 'four': '4',
+                    'five': '5', 'six': '6', 'seven': '7', 'eight': '8', 'nine': '9'
+                };
+
+                words.forEach(word => {
+                    if (numberWords[word]) {
+                        result += numberWords[word];
                     }
                 });
 
-                this.columns.forEach((column, index) => {
-                    if (column.type === 'total') {
-                        cells[index].textContent = sum.toFixed(2);
-                    }
-                });
+                return result;
             }
 
             startVoiceInput() {
@@ -313,20 +370,16 @@
                 const currentCell = tbody.rows[this.currentRow].cells[this.currentCol];
                 const column = this.columns[this.currentCol];
 
-                // Skip total columns
                 if (column.type === 'total') {
                     this.moveToNextColumn();
                     return;
                 }
 
-                // Show voice status
                 document.getElementById('voiceStatus').classList.add('active');
                 document.getElementById('currentColumn').textContent = column.name;
-
-                // Play start beep
+                
                 this.playBeep(700);
 
-                // Start voice recognition
                 this.recognition = new webkitSpeechRecognition();
                 this.recognition.continuous = false;
                 this.recognition.interimResults = true;
@@ -334,14 +387,17 @@
                 this.recognition.onresult = (event) => {
                     const transcript = event.results[0][0].transcript;
                     document.getElementById('voiceOutput').textContent = transcript;
+                    
                     if (event.results[0].isFinal) {
                         const input = currentCell.querySelector('input');
-                        input.value = transcript;
+                        if (column.type === 'number') {
+                            input.value = this.convertSpokenNumberToDigits(transcript);
+                        } else {
+                            input.value = transcript;
+                        }
                         this.updateTotals(tbody.rows[this.currentRow]);
                         
-                        // Play stop beep
                         this.playBeep(500);
-                        
                         setTimeout(() => this.moveToNextColumn(), 1000);
                     }
                 };
@@ -392,13 +448,13 @@
                 });
             }
 
+            // ... (previous code remains the same until downloadExcel function)
+
             downloadExcel() {
                 let csv = '';
                 
-                // Add headers
                 csv += this.columns.map(column => `"${column.name}"`).join(',') + '\n';
 
-                // Add data rows
                 const tbody = document.getElementById('tableBody');
                 Array.from(tbody.rows).forEach(row => {
                     const rowData = Array.from(row.cells).map(cell => {
@@ -408,7 +464,6 @@
                     csv += rowData.join(',') + '\n';
                 });
 
-                // Create download link
                 const blob = new Blob([csv], { type: 'text/csv' });
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
